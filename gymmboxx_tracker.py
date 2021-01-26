@@ -1,69 +1,50 @@
 import pandas as pd
 import requests
-from selenium import webdriver
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
-from selenium.webdriver.common.by import By
-from selenium.webdriver.chrome.options import Options
 from datetime import datetime
 from gspread_pandas import Spread, conf
 from googleapiclient.discovery import build
-
-options = Options()
-options.headless = True
-chromedriver_path = 'INSERT your chromedriver path here'
-driver = webdriver.Chrome(executable_path=chromedriver_path, options=options)
-r = driver.get('https://smartentry.org/status/gymmboxx')
 
 #date and time of the day
 dateandtime = datetime.now()
 date_now = dateandtime.strftime('%d/%m/%Y')
 time_now = dateandtime.strftime('%H:%M')
 
-try:
-    WebDriverWait(driver, 30).until(EC.presence_of_element_located((By.CSS_SELECTOR, "#outlets > div:nth-child(1)")))
-    
-    outlet_fixed_details = {'Bishan' : [50, 6000], 'Bedok Point' : [50, 7660], 'Century Square' : [50, 7500], 'JCube' : [50, 5385], 'Keat Hong' : [37, 4000], 'Kebun Baru' : [21, 2500]}
-    
-    outlet_details = []
-    
-    for outlet in driver.find_elements_by_class_name("box.col-lg-4.col-md-6.col-sm-12"):
-        
-        #extract location of gymmboxx
-        Location = outlet.find_element_by_class_name("lead.mb-3").text
-        
-        #area of outlet
-        area = outlet_fixed_details[Location][1]
-       
-        #Max capacity of outlet
-        max_capacity = outlet_fixed_details[Location][0]
-       
-        #extract percentage capacity of outlets
-        percentage = outlet.find_element_by_class_name("bar-fg").get_attribute('style')
-        percentage = percentage[7:11].strip(' %;')
-        
-        #calculate current capacity
-        capacity_number = round(int(percentage) * max_capacity / 100)
-        
-        #density of outlet
-        try:
-            density = area / capacity_number
-        except ZeroDivisionError:
-            density = 0
+url = "https://smartentry.org/status/api/metrics/gymmboxx"
+headers = {
+    'Accept': 'application/json, text/javascript, */*; q=0.01',
+    'Accept-Encoding': 'gzip, deflate, br',
+    'Accept-Language': 'en-GB,en-US;q=0.9,en;q=0.8',
+    'Connection': 'keep-alive',
+    'Host': 'smartentry.org',
+    'Referer': 'https://smartentry.org/status/gymmboxx',
+    'Sec-Fetch-Dest': 'empty',
+    'Sec-Fetch-Mode': 'cors',
+    'Sec-Fetch-Site': 'same-origin',
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/85.0.4183.83 Safari/537.36',
+    'X-Requested-With': 'XMLHttpRequest'
+}
 
-        #extract current number of people in queue
-        queue = outlet.find_element_by_class_name("queue_length").text
-        
-        outlet_details.append({'Date' : date_now, 'Location': Location, 'Area(SQ.FT)' : area, 'Time' : time_now, 'Max Capacity': max_capacity, 'Current Capacity' : capacity_number, '% Capacity' : percentage, 'SQ.FT/pax' : density, 'Waiting List' : queue})
+response = requests.get(url, headers=headers)
+response_dict = response.json()
+
+outlet_fixed_details = {'Bishan' : 6000, 'Bedok Point' : 7660, 'Century Square' : 7500, 'JCube' : 5385, 'Keat Hong' : 4000, 'Kebun Baru' : 2500, 'Canberra': 5000}
+outlets = response_dict['outlets']
+outlet_details = []
+
+for outlet in outlets:
+    outletName = outlet['name']
+    outletQueue = outlet['queue_length']
+    outletOccupancy = outlet['occupancy']
+    outletLimit = outlet['occupancy_limit']
+    outletPercentage = round(outletOccupancy/outletLimit * 100)
+    outletArea = outlet_fixed_details[outletName]
+    try:
+        density = round(outletArea / outletOccupancy, 2)
+    except ZeroDivisionError:
+        density = 0
+    outlet_details.append({'Date' : date_now, 'Location': outletName, 'Area(SQ.FT)' : outletArea, 'Time' : time_now, 'Max Capacity': outletLimit, 'Current Capacity' : outletOccupancy, '% Capacity' : outletPercentage, 'SQ.FT/pax' : density, 'Waiting List' : outletQueue})
    
-    df = pd.DataFrame(outlet_details, columns = ['Date', 'Location', 'Area(SQ.FT)', 'Time', 'Max Capacity', 'Current Capacity', '% Capacity', 'SQ.FT/pax', 'Waiting List'])
-    
-    print(df)
-
-except Exception as e:
-    driver.save_screenshot('INSERT path to save image')
-
-driver.quit()
+df = pd.DataFrame(outlet_details, columns = ['Date', 'Location', 'Area(SQ.FT)', 'Time', 'Max Capacity', 'Current Capacity', '% Capacity', 'SQ.FT/pax', 'Waiting List'])
 
 service = build('drive', 'v3', credentials = conf.get_creds())
 files = service.files().list(
